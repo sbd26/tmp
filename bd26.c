@@ -10,6 +10,8 @@
 #include "config.h"
 #include "struct.h"
 
+
+
 #define WORKSPACE 4
 
 int8_t current_workspace = 0;
@@ -33,6 +35,34 @@ const char *startup_commands[] = {
 
 static bool wm_detected = false;
 static bd26 wm;
+
+
+FontStruct font_create(const char *fontname, const char *fontcolor,
+                       Window win) {
+  FontStruct fs;
+  XftFont *xft_font = XftFontOpenName(wm.display, current_workspace, fontname);
+  XftDraw *xft_draw =
+      XftDrawCreate(wm.display, win, DefaultVisual(wm.display, current_workspace),
+                    DefaultColormap(wm.display, current_workspace));
+  XftColor xft_font_color;
+  XftColorAllocName(wm.display, DefaultVisual(wm.display, 0),
+                    DefaultColormap(wm.display, 0), fontcolor, &xft_font_color);
+
+  fs.font = xft_font;
+  fs.draw = xft_draw;
+  fs.color = xft_font_color;
+  return fs;
+}
+
+
+
+
+void draw_str(const char *str, FontStruct font, int x, int y) {
+  XftDrawStringUtf8(font.draw, &font.color, font.font, x, y, (XftChar8 *)str,
+                    strlen(str));
+}
+
+
 
 static void handle_create_notify(XCreateWindowEvent e) { (void)e;}
 static void handle_configure_notify(XConfigureEvent e) {(void)e;}
@@ -304,6 +334,7 @@ void resize_client(Client *client , Vec2 sz) {
 
   XResizeWindow(wm.display, client -> win, sz.x, sz.y);
   XResizeWindow(wm.display, client -> frame, sz.x, sz.y);
+  XResizeWindow(wm.display, client -> decoration.title_bar, sz.x, 30);
   XRaiseWindow(wm.display, client -> frame);
 }
 
@@ -367,8 +398,14 @@ void window_frame(Window win){
   XSelectInput(wm.display, win_frame, SubstructureNotifyMask | SubstructureRedirectMask);
   XAddToSaveSet(wm.display, win_frame);
   XReparentWindow(wm.display, win, win_frame, 0, 0);
+
+
+  XResizeWindow(wm.display, win, attribs.width, attribs.height - 30);
+  XMoveWindow(wm.display, win, 0, 30);
   XMapWindow(wm.display, win_frame);
   XSetInputFocus(wm.display, win, RevertToPointerRoot, CurrentTime);
+
+
 
   wm.client_windows[current_workspace][wm.clients_count[current_workspace]++] = (Client) {.win = win, .frame = win_frame, .fullscreen = attribs.width >= DISPLAY_WIDTH && attribs.height >= DISPLAY_HEIGHT};
   grab_window_key(win);
@@ -393,17 +430,42 @@ void window_frame(Window win){
   }
   wm.client_windows[current_workspace][get_client_index(win_frame)].was_focused = true;
 
+  Window win_decoration = XCreateSimpleWindow(wm.display, wm.root, 50, (768 / 2) - (attribs.height), attribs.width, attribs.height, BORDER_WIDTH, FBORDER_COLOR, BG_COLOR);
 
-  Window win_decoration = XCreateSimpleWindow(wm.display, wm.root, 0, 0, attribs.width, attribs.height, BORDER_WIDTH, FBORDER_COLOR, BG_COLOR);
-  XUnmapWindow(wm.display, win_decoration);
+  int32_t client_index = get_client_index(win);
+
+
   XWindowAttributes attribs_frame;
-  XGetWindowAttributes(wm.display, win_frame, &attribs_frame);
 
-  wm.client_windows[current_workspace][wm.clients_count[current_workspace] - 1].decoration.close_icon = 
-    XCreateSimpleWindow(wm.display, win_decoration, attribs_frame.width - 15, 0, 15, 20, 0, FBORDER_COLOR, 0xff0000);
-  XSelectInput(wm.display, wm.client_windows[current_workspace][wm.clients_count[current_workspace] - 1].decoration.close_icon, ButtonPressMask | SubstructureNotifyMask | SubstructureRedirectMask);
-  XMapWindow(wm.display, wm.client_windows[current_workspace][wm.clients_count[current_workspace]- 1].decoration.close_icon);
-  XReparentWindow(wm.display, wm.client_windows[current_workspace][wm.clients_count[current_workspace] - 1].decoration.close_icon, win_frame, attribs_frame.width - 15, 0);
+  XGetWindowAttributes(wm.display, win_frame, &attribs_frame);
+  //title bar
+  wm.client_windows[current_workspace][client_index].decoration.title_bar = XCreateSimpleWindow(wm.display, win_decoration, 0, 0, attribs_frame.width, 30, 0, 0, 0x302d35);
+  XSelectInput(wm.display, wm.client_windows[current_workspace][client_index].decoration.title_bar, SubstructureRedirectMask | SubstructureNotifyMask);
+  XMapWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.title_bar);
+  XReparentWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.title_bar, win_frame, 0, 0);
+
+
+
+
+
+  //fullscreen button
+
+  wm.client_windows[current_workspace][client_index].decoration.max_button = XCreateSimpleWindow(wm.display, win_decoration, 0, 0, 20, 20, 0, FBORDER_COLOR, DECORATION_MAXIMIZE_ICON_COLOR);
+  XSelectInput(wm.display, wm.client_windows[current_workspace][client_index].decoration.max_button, SubstructureRedirectMask | SubstructureNotifyMask | ButtonPressMask);
+  XMapWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.max_button); XRaiseWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.max_button);
+  XReparentWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.max_button, win_frame, 0, 0);
+
+//
+  wm.client_windows[current_workspace][client_index].decoration.titlebar_font = font_create(FONT, DECORATION_FONT_COLOR, wm.client_windows[current_workspace][client_index].decoration.title_bar);
+  wm.client_windows[current_workspace][client_index].decoration.maximize_button_font = font_create(FONT, DECORATION_FONT_COLOR, wm.client_windows[current_workspace][client_index].decoration.close_icon);
+// //
+  XGlyphInfo extents;
+  XClearWindow(wm.display, wm.client_windows[current_workspace][client_index].decoration.max_button);
+  XftTextExtents16(wm.display, wm.client_windows[current_workspace][client_index].decoration.maximize_button_font.font, (FcChar16 *)DECORATION_MAXIMIZE_ICON, strlen(DECORATION_MAXIMIZE_ICON), &extents);
+// //
+draw_str(DECORATION_MAXIMIZE_ICON, wm.client_windows[current_workspace][client_index].decoration.maximize_button_font,
+             (DECORATION_MAXIMIZE_ICON_SIZE) - (extents.xOff / 2.0f),
+             (30.0 / 2.0f) + (extents.height));
 }
 
 void window_unframe(Window win){
@@ -498,6 +560,7 @@ void handle_configure_request(XConfigureRequestEvent e){
 
 void handle_button_press(XButtonEvent e){
   Window frame = get_frame_window(e.window);
+  printf("Handle button Press\n");
   wm.cursor_start_pos = (Vec2) {.x = (float)e.x_root, .y = (float)e.y_root};
   Window root;
   int32_t x, y;
@@ -507,8 +570,7 @@ void handle_button_press(XButtonEvent e){
   wm.cursor_start_frame_pos = (Vec2){.x = (float)x, .y = (float)y};
   wm.cursor_start_frame_size = (Vec2){.x = (float)width, .y = (float)height};
 
-  XRaiseWindow(wm.display, wm.client_windows[current_workspace][get_client_index(e.window)].win);
-  XSetInputFocus(wm.display, e.window, RevertToPointerRoot, CurrentTime);
+  XRaiseWindow(wm.display, wm.client_windows[current_workspace][get_client_index(e.window)].frame);
 
   if (e.button == Button1 && wm.currentstate[current_workspace] == MINI_STATE && e.window != wm.root){
     if (e.state & ShiftMask){
@@ -520,18 +582,12 @@ void handle_button_press(XButtonEvent e){
 
 
   for (uint32_t i = 0; i < wm.clients_count[current_workspace]; i++){
-    if (wm.client_windows[current_workspace][i].decoration.close_icon == e.window){
-        XEvent msg;
-        memset(&msg, 0, sizeof(msg));
-        msg.xclient.type = ClientMessage;
-        msg.xclient.message_type =
-            XInternAtom(wm.display, "WM_PROTOCOLS", false);
-        msg.xclient.window = e.window;
-        msg.xclient.format = 32;
-        msg.xclient.data.l[0] =
-            XInternAtom(wm.display, "WM_DELETE_WINDOW", false);
-        XSendEvent(wm.display, e.window, false, 0, &msg);
-        break;
+    if (wm.client_windows[current_workspace][i].decoration.max_button == e.window){
+      if (wm.client_windows[current_workspace][i].fullscreen){
+        unset_fullscreen(wm.client_windows[current_workspace][i].frame); break;
+      }
+      else
+      {set_fullscreen(wm.client_windows[current_workspace][i].frame);break;}
     }
   }
 
@@ -606,7 +662,7 @@ void grab_global_key(){
 void grab_window_key(Window win){
   XGrabButton(wm.display, Button1, MOD, win, false, ButtonPressMask | ButtonReleaseMask | ButtonMotionMask, GrabModeAsync, GrabModeAsync, None, None);
   XGrabButton(wm.display, Button3, MOD, win, false, ButtonPressMask | ButtonReleaseMask | ButtonMotionMask, GrabModeAsync, GrabModeAsync, None, None);
-  XGrabButton(wm.display, Button1, ShiftMask, win, false, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None);
+  // XGrabButton(wm.display, Button1, MOD, win, false, ButtonPressMask | ButtonReleaseMask, GrabModeAsync, GrabModeAsync, None, None);
   XGrabKey(wm.display, XKeysymToKeycode(wm.display, CLOSE_WINDOW), MOD, win, false, GrabModeAsync, GrabModeAsync);
   XGrabKey(wm.display, XKeysymToKeycode(wm.display, FULL_SCREEN), MOD, win, false, GrabModeAsync, GrabModeAsync);
   XGrabKey(wm.display, XKeysymToKeycode(wm.display, SWAP_WINDOW), MOD, win, false, GrabModeAsync, GrabModeAsync);
